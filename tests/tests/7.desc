@@ -1,0 +1,1 @@
+Check the case where a new process joins after a while - it should not monopolize the CPU

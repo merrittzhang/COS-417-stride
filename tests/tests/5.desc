@@ -1,0 +1,1 @@
+Check getpinfo - the # of processes with valid pid should be incremented by one after creating a child

@@ -1,0 +1,1 @@
+Pass nullptr to getpinfo - should return -1
