@@ -91,4 +91,22 @@ sys_uptime(void)
   return xticks;
 }
 
-// TODO: new syscall frameworks here
+int
+sys_settickets(void)
+{
+  int n;
+  if(argint(0, &n) < 0)
+    return -1;
+  return set_process_tickets(n);
+}
+
+int
+sys_getpinfo(void)
+{
+  struct pstat *ps; 
+
+  if(argptr(0, (char**)&ps, sizeof(*ps)) < 0)
+    return -1;
+
+  return proc_getpinfo(ps);
+}

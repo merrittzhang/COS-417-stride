@@ -1,3 +1,5 @@
+#pragma once
+
 #define NPROC        64  // maximum number of processes
 
 struct pstat {

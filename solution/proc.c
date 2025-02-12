@@ -14,6 +14,10 @@
 #define DEFAULT_TICKETS 8
 #define DEBUGLOG 0
 
+int global_tickets = 0;      // Sum of tickets among RUNNING/RUNNABLE procs
+int global_stride = 0;       // = STRIDE1 / global_tickets (integer division)
+int global_pass = 0;         // Accumulated every tick by global_stride
+
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -72,11 +76,30 @@ myproc(void) {
   return p;
 }
 
-void 
-update_on_tick() 
+void
+update_on_tick(void)
 {
-  // TODO: place for any logic to update stride scheduler-specific states upon a tick
-  
+  struct proc *curp = myproc();
+  if(curp && curp->state == RUNNING){
+    curp->rtime += 1;
+  }
+
+  int total = 0;
+  struct proc *p;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state == RUNNING || p->state == RUNNABLE){
+      total += p->tickets;
+    }
+  }
+  global_tickets = total;
+
+  if(global_tickets > 0)
+    global_stride = STRIDE1 / global_tickets;
+  else
+    global_stride = 0;
+
+  if(global_stride > 0)
+    global_pass += global_stride;
 }
 
 //PAGEBREAK: 32
@@ -105,6 +128,10 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->tickets = DEFAULT_TICKETS;
+  p->stride = STRIDE1 / p->tickets;
+  p->pass = 0;
+  p->rtime = 0;
 
   release(&ptable.lock);
 
@@ -166,6 +193,7 @@ userinit(void)
   acquire(&ptable.lock);
 
   p->state = RUNNABLE;
+  p->pass = global_pass;
 
   release(&ptable.lock);
 }
@@ -232,6 +260,7 @@ fork(void)
   acquire(&ptable.lock);
 
   np->state = RUNNABLE;
+  np->pass = global_pass;
 
   release(&ptable.lock);
 
@@ -372,7 +401,51 @@ scheduler(void)
   }
 #endif
 #ifdef STRIDE
-  // TODO: Stride scheduler implementation here
+  struct cpu *c = mycpu();
+  c->proc = 0;
+
+  for(;;){
+    // Enable interrupts on this CPU
+    sti();
+
+    acquire(&ptable.lock);
+
+    // Find the RUNNABLE process with the lowest (pass, rtime, pid).
+    struct proc *pChosen = 0;
+    int minPass = 0x7fffffff; 
+    int minRtime = 0x7fffffff;
+    int minPid = 0x7fffffff;
+
+    struct proc *p;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->state == RUNNABLE){
+        if( (p->pass < minPass) ||
+            (p->pass == minPass && p->rtime < minRtime) ||
+            (p->pass == minPass && p->rtime == minRtime && p->pid < minPid) ){
+          pChosen = p;
+          minPass = p->pass;
+          minRtime = p->rtime;
+          minPid = p->pid;
+        }
+      }
+    }
+
+    // If we found a process:
+    if(pChosen){
+      // Switch to chosen process
+      c->proc = pChosen;
+      switchuvm(pChosen);
+      pChosen->state = RUNNING;
+
+      swtch(&c->scheduler, pChosen->context);
+      switchkvm();
+
+      // "Return" from process: it changed state or yielded
+      c->proc = 0;
+    }
+
+    release(&ptable.lock);
+  }
 #endif
 }
 
@@ -407,6 +480,10 @@ void
 yield(void)
 {
   acquire(&ptable.lock);  //DOC: yieldlock
+  // If we are in RUNNING state, we must increment pass before giving up CPU
+  if(myproc()->state == RUNNING){
+    myproc()->pass += myproc()->stride;
+  }
   myproc()->state = RUNNABLE;
   sched();
   release(&ptable.lock);
@@ -483,6 +560,7 @@ wakeup1(void *chan)
   for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
     if (p->state == SLEEPING && p->chan == chan) {
       p->state = RUNNABLE;
+      p->pass = global_pass;
     }
   }
 }
@@ -557,4 +635,39 @@ procdump(void)
   }
 }
 
-// TODO: Implementation of syscall behaviors here
+// Allows a process to set its own number of tickets via syscall
+int
+set_process_tickets(int n)
+{
+  struct proc *p = myproc();
+
+  if(n < 1)
+    n = DEFAULT_TICKETS;
+  if(n > MAX_TICKETS)
+    n = MAX_TICKETS;
+
+  p->tickets = n;
+  p->stride = STRIDE1 / p->tickets;
+
+  p->pass = global_pass;
+
+  return 0;  // success
+}
+
+// Fill a pstat struct with info about all processes
+int
+proc_getpinfo(struct pstat *ps)
+{
+  acquire(&ptable.lock);
+  for(int i = 0; i < NPROC; i++){
+    struct proc *p = &ptable.proc[i];
+    ps->inuse[i]   = (p->state != UNUSED);
+    ps->pid[i]     = p->pid;
+    ps->tickets[i] = p->tickets;
+    ps->stride[i]  = p->stride;
+    ps->pass[i]    = p->pass;
+    ps->rtime[i]   = p->rtime;
+  }
+  release(&ptable.lock);
+  return 0;
+}

@@ -1,4 +1,7 @@
 // Per-CPU state
+
+#include "pstat.h"
+
 struct cpu {
   uchar apicid;                // Local APIC ID
   struct context *scheduler;   // swtch() here to enter scheduler
@@ -49,6 +52,10 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int tickets;                 // Number of tickets
+  int stride;                  // stride = STRIDE1 / tickets
+  int pass;                    // Accumulated pass
+  int rtime;                   // Total running time (in ticks)
 };
 
 // Process memory is laid out contiguously, low addresses first:
@@ -56,3 +63,7 @@ struct proc {
 //   original data and bss
 //   fixed-size stack
 //   expandable heap
+
+// Helpers for the new syscalls in proc.c:
+int set_process_tickets(int n);
+int proc_getpinfo(struct pstat *ps);
